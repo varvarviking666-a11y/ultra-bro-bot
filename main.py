@@ -2,11 +2,13 @@ import telebot
 import yt_dlp
 import os
 import threading
+import asyncio
+from shazamio import Shazam
 from flask import Flask
 
 app = Flask(__name__)
 @app.route('/')
-def hello(): return "Бот-меломан активен!"
+def hello(): return "Бот с Shazam активен!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -15,48 +17,48 @@ def run_flask():
 TOKEN = '8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4'
 bot = telebot.TeleBot(TOKEN)
 
-@bot.message_handler(func=lambda message: 'tiktok.com' in message.text)
-def download_all(message):
-    msg = bot.reply_to(message, "🎬 Готовлю видео и аудио-плеер...")
-    try:
-        # 1. Качаем лучшее видео
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': 'file.%(ext)s',
-            'quiet': True,
+async def recognize_track(path):
+    shazam = Shazam()
+    out = await shazam.recognize_song(path)
+    if out.get('track'):
+        return {
+            'title': out['track']['title'],
+            'artist': out['track']['subtitle']
         }
+    return None
 
+@bot.message_handler(func=lambda message: 'tiktok.com' in message.text)
+def handle_tiktok(message):
+    msg = bot.reply_to(message, "🎬 Качаю и включаю Shazam... 🔎")
+    try:
+        ydl_opts = {'format': 'best', 'outtmpl': 'file.%(ext)s', 'quiet': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(message.text, download=True)
             video_file = ydl.prepare_filename(info)
-            # Достаем инфу о музыке
-            artist = info.get('artist', 'TikTok')
-            track = info.get('track', 'Оригинальный звук')
 
-        # 2. Вырезаем звук в MP3 для плеера
         audio_file = "music.mp3"
         os.system(f"ffmpeg -i {video_file} -vn -ar 44100 -ac 2 -b:a 192k {audio_file}")
 
-        # 3. Отправляем видео
+        # Запускаем Shazam
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        found = loop.run_until_complete(recognize_track(audio_file))
+
+        artist = found['artist'] if found else info.get('artist', 'TikTok')
+        track = found['title'] if found else info.get('track', 'Оригинальный звук')
+
         with open(video_file, 'rb') as v:
-            bot.send_video(message.chat.id, v, caption="✅ Видео сохранено")
+            bot.send_video(message.chat.id, v, caption="✅ Видео готово")
 
-        # 4. Отправляем аудио (будет выглядеть как плеер!)
         with open(audio_file, 'rb') as a:
-            bot.send_audio(
-                message.chat.id, 
-                a, 
-                performer=artist, 
-                title=track
-            )
+            bot.send_audio(message.chat.id, a, performer=artist, title=track)
 
-        # Удаляем временные файлы
         os.remove(video_file)
         os.remove(audio_file)
         bot.delete_message(message.chat.id, msg.message_id)
 
     except Exception as e:
-        bot.reply_to(message, f"Ошибка, бро: {e}")
+        bot.reply_to(message, f"Ошибка: {e}")
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
