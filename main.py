@@ -6,7 +6,7 @@ from flask import Flask
 
 app = Flask(__name__)
 @app.route('/')
-def hello(): return "Музыкальный поиск активен!"
+def hello(): return "Бот работает стабильно!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -17,39 +17,42 @@ bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(func=lambda message: 'tiktok.com' in message.text)
 def download_all(message):
-    msg = bot.reply_to(message, "🎬 Качаю видео и ищу полный трек... Погоди секунду!")
+    msg = bot.reply_to(message, "🚀 Загружаю видео и музыку...")
     try:
-        # 1. Получаем инфо и видео
-        ydl_opts_video = {'format': 'best', 'outtmpl': 'video.mp4', 'quiet': True}
-        with yt_dlp.YoutubeDL(ydl_opts_video) as ydl:
-            info = ydl.extract_info(message.text, download=True)
-            search_query = f"{info.get('artist', '')} {info.get('track', 'original sound')}"
-            
-        # 2. Ищем ПОЛНЫЙ трек на YouTube Music по названию
-        ydl_opts_audio = {
-            'format': 'bestaudio/best',
-            'outtmpl': 'full_track.mp3',
-            'default_search': 'ytsearch1:', # Ищем первый попавшийся оригинал
-            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
-            'quiet': True
+        # 1. Настройки для видео и аудио из ОДНОГО источника (TikTok)
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': 'file.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
         }
-        
-        with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
-            ydl.download([f"ytsearch1:{search_query}"])
 
-        # Отправляем результаты
-        with open('video.mp4', 'rb') as v:
-            bot.send_video(message.chat.id, v, caption="✅ Видео готово")
-        
-        with open('full_track.mp3', 'rb') as a:
-            bot.send_audio(message.chat.id, a, title=search_query, performer="Найдено в поиске")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(message.text, download=True)
+            video_filename = ydl.prepare_filename(info)
+            # Вытаскиваем название трека из инфы ТикТока
+            track_name = info.get('track', 'Музыка из TikTok')
+            artist_name = info.get('artist', 'Автор неизвестен')
 
-        os.remove('video.mp4')
-        os.remove('full_track.mp3')
+        # 2. Конвертируем видео в MP3 для отдельного файла
+        audio_filename = "music.mp3"
+        os.system(f"ffmpeg -i {video_filename} -q:a 0 -map a {audio_filename}")
+
+        # 3. Отправляем видео
+        with open(video_filename, 'rb') as v:
+            bot.send_video(message.chat.id, v, caption="✅ Видео в макс. качестве")
+
+        # 4. Отправляем аудио (как ты просил)
+        with open(audio_filename, 'rb') as a:
+            bot.send_audio(message.chat.id, a, title=track_name, performer=artist_name)
+
+        # Чистим файлы
+        os.remove(video_filename)
+        os.remove(audio_filename)
         bot.delete_message(message.chat.id, msg.message_id)
 
     except Exception as e:
-        bot.reply_to(message, f"Бро, не вышло найти оригинал: {e}")
+        bot.reply_to(message, f"Ошибка: {e}")
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
