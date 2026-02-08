@@ -1,43 +1,62 @@
 import os
+import telebot
+from flask import Flask, request
 import subprocess
-import requests
-from aiogram import Bot, Dispatcher, executor, types
+import asyncio
+from shazamio import Shazam
+import threading
 
-# Твой токен вставлен напрямую
+# Токен вставлен напрямую
 API_TOKEN = "8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4"
-AUDD_API_KEY = os.getenv("AUDD_API_KEY") # ключ для аудио-распознавания
+bot = telebot.TeleBot(API_TOKEN)
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+app = Flask(__name__)
 
-@dp.message_handler(commands=['start'])
-async def start(message: types.Message):
-    await message.reply("Привет! Скинь ссылку на видео, я попробую найти музыку 🎵")
+# Маршрут для проверки Render
+@app.route("/")
+def index():
+    return "Bot is running", 200
 
-@dp.message_handler()
-async def handle_video(message: types.Message):
+# Обработчик команды /start
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "Привет! Скинь ссылку на видео, я попробую найти музыку 🎵")
+
+# Обработчик ссылок
+@bot.message_handler(func=lambda m: 'http' in m.text)
+def handle_video(message):
     url = message.text.strip()
-    await message.reply("Скачиваю видео...")
+    msg = bot.reply_to(message, "Скачиваю аудио...")
 
-    # Скачиваем видео и аудио
-    subprocess.run(["yt-dlp", "-f", "bestaudio", "-o", "audio.mp3", url])
+    try:
+        # Скачиваем аудио из видео
+        subprocess.run(["yt-dlp", "-f", "bestaudio", "-o", "full_track.mp3", url])
 
-    await message.reply("Ищу музыку...")
+        bot.edit_message_text("Ищу музыку...", message.chat.id, msg.message_id)
 
-    # Отправляем аудио в Audd.io
-    with open("audio.mp3", "rb") as f:
-        response = requests.post("https://api.audd.io/", data={
-            "api_token": AUDD_API_KEY,
-            "return": "apple_music,spotify"
-        }, files={"file": f})
+        async def recognize():
+            shazam = Shazam()
+            out = await shazam.recognize_song("full_track.mp3")
+            if out.get('matches'):
+                track = out['track']['title']
+                artist = out['track']['subtitle']
+                bot.reply_to(message, f"Нашёл: {artist} – {track}")
+            else:
+                bot.reply_to(message, "Не удалось распознать трек 😔")
+            
+            if os.path.exists("full_track.mp3"):
+                os.remove("full_track.mp3")
 
-    result = response.json()
-    if result.get("result"):
-        track = result["result"]["title"]
-        artist = result["result"]["artist"]
-        await message.reply(f"Нашёл: {artist} – {track}")
-    else:
-        await message.reply("Не удалось распознать трек 😔")
+        asyncio.run(recognize())
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {str(e)}")
 
-if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    # Запускаем Flask в отдельном потоке для Render
+    threading.Thread(target=run_flask).start()
+    print("Бот запущен через polling...")
+    bot.infinity_polling()
