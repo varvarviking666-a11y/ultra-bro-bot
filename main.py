@@ -4,9 +4,10 @@ import os
 from flask import Flask
 import threading
 
+# Веб-сервер для поддержания жизни на Render
 app = Flask(__name__)
 @app.route('/')
-def home(): return "AI Music Bot is Running"
+def home(): return "AI Intelligence is Live"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -15,30 +16,32 @@ def run_flask():
 TOKEN = '8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4'
 bot = telebot.TeleBot(TOKEN)
 
-def download_and_send(message):
-    url = message.text
-    msg = bot.reply_to(message, "⚡️ ИИ анализирует ссылку...")
+@bot.message_handler(func=lambda m: 'tiktok.com' in m.text)
+def handle_tiktok(message):
+    status = bot.reply_to(message, "🧠 ИИ извлекает информацию о треке...")
     
     try:
-        # 1. Получаем инфо о видео без скачивания самого видео
+        url = message.text
+        
+        # 1. ИИ вытаскивает инфу напрямую из метаданных видео
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
-            # Пытаемся достать название трека из метаданных TikTok
-            track = info.get('track')
-            artist = info.get('artist')
+            # Берем название трека или автора из описания
+            track_title = info.get('track') or info.get('alt_title') or info.get('title')
+            artist = info.get('artist') or info.get('creator') or ""
             
-            if track and artist:
-                query = f"{artist} - {track}"
-            else:
-                # Если метаданных нет, берем описание или название видео
-                query = info.get('title', 'TikTok Music').split('|')[0].strip()
+            query = f"{artist} {track_title}".strip()
+            
+            if not query or "original sound" in query.lower():
+                # Если в метаданных пусто, ИИ ищет по заголовку
+                query = info.get('title').split('|')[0].replace('#', '').strip()
 
-        bot.edit_message_text(f"🔍 Ищу полную версию: **{query}**", message.chat.id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"🔍 Нашел информацию: **{query}**\n📥 Качаю полную версию...", message.chat.id, status.message_id, parse_mode="Markdown")
 
-        # 2. Качаем ПОЛНЫЙ трек из SoundCloud (избегаем капчи YouTube)
+        # 2. Поиск и загрузка полной версии из облака (SoundCloud)
         ydl_opts = {
             'format': 'bestaudio/best',
-            'outtmpl': 'song.mp3',
+            'outtmpl': 'full_track.mp3',
             'default_search': 'scsearch1:',
             'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
             'quiet': True
@@ -47,20 +50,15 @@ def download_and_send(message):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([f"scsearch1:{query}"])
             
-        # 3. Отправляем файл
-        with open('song.mp3', 'rb') as audio:
-            bot.send_audio(message.chat.id, audio, title=query, performer="Full Track")
+        # 3. Отправка файла
+        with open('full_track.mp3', 'rb') as audio:
+            bot.send_audio(message.chat.id, audio, title=query, performer="AI Intelligence")
             
-        os.remove('song.mp3')
-        bot.delete_message(message.chat.id, msg.message_id)
+        os.remove('full_track.mp3')
+        bot.delete_message(message.chat.id, status.message_id)
 
     except Exception as e:
-        bot.edit_message_text(f"❌ Не удалось найти чистый трек. Ошибка: {str(e)}", message.chat.id, msg.message_id)
-
-@bot.message_handler(func=lambda m: 'tiktok.com' in m.text)
-def handle_link(message):
-    # Запускаем в отдельном потоке, чтобы бот не тупил
-    threading.Thread(target=download_and_send, args=(message,)).start()
+        bot.edit_message_text(f"❌ ИИ не смог вытащить инфу. Ошибка: {str(e)}", message.chat.id, status.message_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
