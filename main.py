@@ -1,65 +1,72 @@
 import telebot
-import yt_dlp
+import asyncio
+from shazamio import Shazam
 import os
 from flask import Flask
 import threading
 
-# Веб-сервер для поддержания жизни на Render
+# === НАСТРОЙКИ ===
+# Твой токен вставлен сюда
+TELEGRAM_TOKEN = "8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4"
+MAX_FILE_SIZE_MB = 20
+
+# Мини-сервер для поддержания жизни на Render
 app = Flask(__name__)
 @app.route('/')
-def home(): return "AI Intelligence is Live"
+def home(): return "AI Shazam Bot is Live"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-TOKEN = '8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4'
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-@bot.message_handler(func=lambda m: 'tiktok.com' in m.text)
-def handle_tiktok(message):
-    status = bot.reply_to(message, "🧠 ИИ извлекает информацию о треке...")
-    
+async def recognize_track(file_path: str):
+    shazam = Shazam()
     try:
-        url = message.text
-        
-        # 1. ИИ вытаскивает инфу напрямую из метаданных видео
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            # Берем название трека или автора из описания
-            track_title = info.get('track') or info.get('alt_title') or info.get('title')
-            artist = info.get('artist') or info.get('creator') or ""
-            
-            query = f"{artist} {track_title}".strip()
-            
-            if not query or "original sound" in query.lower():
-                # Если в метаданных пусто, ИИ ищет по заголовку
-                query = info.get('title').split('|')[0].replace('#', '').strip()
+        # Прямое распознавание файла
+        result = await shazam.recognize_song(file_path)
+        if "track" in result and result["track"]:
+            track = result["track"]
+            title = track.get("title", "Неизвестно")
+            subtitle = track.get("subtitle", "Неизвестно")
+            url = track.get("share", {}).get("href", "Ссылка отсутствует")
+            return f"🎵 Найдено: {title} — {subtitle}\n🔗 {url}"
+        else:
+            return "❌ Трек не найден."
+    except Exception as e:
+        return f"⚠ Ошибка при распознавании: {e}"
 
-        bot.edit_message_text(f"🔍 Нашел информацию: **{query}**\n📥 Качаю полную версию...", message.chat.id, status.message_id, parse_mode="Markdown")
+@bot.message_handler(content_types=['audio', 'voice'])
+def handle_audio(message):
+    try:
+        file_id = message.audio.file_id if message.content_type == 'audio' else message.voice.file_id
+        file_info = bot.get_file(file_id)
+        file_size_mb = file_info.file_size / (1024 * 1024)
 
-        # 2. Поиск и загрузка полной версии из облака (SoundCloud)
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': 'full_track.mp3',
-            'default_search': 'scsearch1:',
-            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
-            'quiet': True
-        }
+        if file_size_mb > MAX_FILE_SIZE_MB:
+            bot.reply_to(message, f"⚠ Файл слишком большой (>{MAX_FILE_SIZE_MB} МБ).")
+            return
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"scsearch1:{query}"])
-            
-        # 3. Отправка файла
-        with open('full_track.mp3', 'rb') as audio:
-            bot.send_audio(message.chat.id, audio, title=query, performer="AI Intelligence")
-            
-        os.remove('full_track.mp3')
-        bot.delete_message(message.chat.id, status.message_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        file_path = f"temp_{message.chat.id}.mp3"
+        with open(file_path, 'wb') as f:
+            f.write(downloaded_file)
+
+        bot.reply_to(message, "🔍 ИИ анализирует звук...")
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result_text = loop.run_until_complete(recognize_track(file_path))
+
+        bot.send_message(message.chat.id, result_text)
+        if os.path.exists(file_path): os.remove(file_path)
 
     except Exception as e:
-        bot.edit_message_text(f"❌ ИИ не смог вытащить инфу. Ошибка: {str(e)}", message.chat.id, status.message_id)
+        bot.reply_to(message, f"⚠ Ошибка: {e}")
 
 if __name__ == "__main__":
+    # Запуск сервера для Render
     threading.Thread(target=run_flask).start()
-    bot.polling(none_stop=True)
+    print("Бот запущен...")
+    bot.infinity_polling()
