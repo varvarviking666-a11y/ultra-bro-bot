@@ -6,10 +6,10 @@ from shazamio import Shazam
 from flask import Flask
 import threading
 
-# Настройка веб-сервера для Render
+# Мини-сервер для Render, чтобы бот не засыпал
 app = Flask(__name__)
 @app.route('/')
-def home(): return "AI-Shazam Bot is Active!"
+def home(): return "AI-Bot is Online!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -18,7 +18,7 @@ def run_flask():
 TOKEN = '8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4'
 bot = telebot.TeleBot(TOKEN)
 
-async def recognize_audio(path):
+async def ai_recognize(path):
     shazam = Shazam()
     res = await shazam.recognize_song(path)
     if res and res.get('track'):
@@ -26,58 +26,55 @@ async def recognize_audio(path):
     return None
 
 @bot.message_handler(func=lambda m: 'tiktok.com' in m.text)
-def handle_tiktok(message):
-    status = bot.reply_to(message, "⚙️ ИИ в деле: качаю видео и ищу трек...")
+def ai_handler(message):
+    status = bot.reply_to(message, "🤖 Мозги ИИ включены: обрабатываю твою ссылку...")
     
     try:
-        # 1. Качаем видео и звук отдельно
-        video_path = 'final_video.mp4'
-        audio_path = 'check_audio.mp3'
+        video_file = 'video.mp4'
+        audio_check = 'check.mp3'
         
-        # Опции для видео
-        ydl_v_opts = {'format': 'bestvideo+bestaudio/best', 'outtmpl': video_path, 'quiet': True}
-        # Опции для поиска оригинала в SoundCloud (минуя YouTube)
-        ydl_sc_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': 'full_track.mp3',
-            'default_search': 'scsearch1:', 
-            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
-            'quiet': True
-        }
-
+        # 1. Качаем видео (лучшее качество)
+        ydl_v_opts = {'format': 'best', 'outtmpl': video_file, 'quiet': True}
         with yt_dlp.YoutubeDL(ydl_v_opts) as ydl:
             ydl.download([message.text])
         
-        # Извлекаем быстрый кусок звука для Shazam
-        os.system(f"ffmpeg -i {video_path} -vn -t 10 -ar 44100 -ac 2 {audio_path} -y")
+        # 2. Быстро вырезаем 10 секунд для Shazam
+        os.system(f"ffmpeg -i {video_file} -vn -t 10 -ar 44100 -ac 2 {audio_check} -y")
         
-        # 2. Узнаем название через Shazam
+        # 3. Распознаем трек
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        track_name = loop.run_until_complete(recognize_audio(audio_path))
+        track_name = loop.run_until_complete(ai_recognize(audio_check))
 
-        # 3. Отправляем видео
-        with open(video_path, 'rb') as v:
-            bot.send_video(message.chat.id, v, caption="✅ Видео готово")
+        # 4. Отправляем видео
+        with open(video_file, 'rb') as v:
+            bot.send_video(message.chat.id, v, caption="✅ Видео скачано через ИИ")
 
-        # 4. Если трек найден, ищем и шлем полную версию
+        # 5. Ищем и шлем ПОЛНЫЙ трек (SoundCloud)
         if track_name:
-            bot.edit_message_text(f"🔍 Нашел трек: {track_name}\nДостаю полную версию...", message.chat.id, status.message_id)
+            bot.edit_message_text(f"🎵 ИИ нашел трек: {track_name}\nКачаю полную версию...", message.chat.id, status.message_id)
+            ydl_sc_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': 'full.mp3',
+                'default_search': 'scsearch1:', 
+                'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
+                'quiet': True
+            }
             with yt_dlp.YoutubeDL(ydl_sc_opts) as ydl:
                 ydl.download([f"scsearch1:{track_name}"])
             
-            with open('full_track.mp3', 'rb') as a:
-                bot.send_audio(message.chat.id, a, title=track_name, performer="AI Full Version")
-            os.remove('full_track.mp3')
+            with open('full.mp3', 'rb') as a:
+                bot.send_audio(message.chat.id, a, title=track_name, performer="AI Full Music")
+            os.remove('full.mp3')
         else:
-            bot.edit_message_text("🤷‍♂️ Оригинал в базе не найден, прислал только видео.", message.chat.id, status.message_id)
+            bot.edit_message_text("ℹ️ Видео готово. Полный трек в базе не найден.", message.chat.id, status.message_id)
 
-        # Чистим мусор
-        for f in [video_path, audio_path]:
+        # Удаляем временные файлы
+        for f in [video_file, audio_check]:
             if os.path.exists(f): os.remove(f)
             
     except Exception as e:
-        bot.edit_message_text(f"❌ Сбой: {str(e)}", message.chat.id, status.message_id)
+        bot.edit_message_text(f"❌ Ошибка ИИ: {str(e)}", message.chat.id, status.message_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
