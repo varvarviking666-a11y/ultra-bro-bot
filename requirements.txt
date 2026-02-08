@@ -1,6 +1,6 @@
 pyTelegramBotAPI
 shazamio
 flask
-aiogram
+aiogram==2.25.1
 yt-dlp
 requests
