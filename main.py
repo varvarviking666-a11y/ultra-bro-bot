@@ -1,15 +1,12 @@
 import telebot
 import yt_dlp
 import os
-import asyncio
-from shazamio import Shazam
 from flask import Flask
 import threading
 
-# Веб-сервер, чтобы бот не засыпал на Render
 app = Flask(__name__)
 @app.route('/')
-def home(): return "AI Shazam is Live!"
+def home(): return "AI Music Bot is Running"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -18,54 +15,52 @@ def run_flask():
 TOKEN = '8512698228:AAFgjxxCBY0hnYqtVFD-pter14gKL5nCGd4'
 bot = telebot.TeleBot(TOKEN)
 
-async def shazam_it(url):
-    shazam = Shazam()
-    # Качаем только 10 сек звука для распознавания
-    ydl_opts = {'format': 'wa', 'outtmpl': 'sample.mp3', 'quiet': True}
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        res = await shazam.recognize_song('sample.mp3')
-        if os.path.exists('sample.mp3'): os.remove('sample.mp3')
-        if res and res.get('track'):
-            return f"{res['track']['subtitle']} - {res['track']['title']}"
-    except: return None
-    return None
-
-@bot.message_handler(func=lambda m: 'tiktok.com' in m.text)
-def handle_link(message):
-    status = bot.reply_to(message, "🧠 Шазамлю видео... Ищу полный трек.")
+def download_and_send(message):
+    url = message.text
+    msg = bot.reply_to(message, "⚡️ ИИ анализирует ссылку...")
     
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        name = loop.run_until_complete(shazam_it(message.text))
+        # 1. Получаем инфо о видео без скачивания самого видео
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # Пытаемся достать название трека из метаданных TikTok
+            track = info.get('track')
+            artist = info.get('artist')
+            
+            if track and artist:
+                query = f"{artist} - {track}"
+            else:
+                # Если метаданных нет, берем описание или название видео
+                query = info.get('title', 'TikTok Music').split('|')[0].strip()
 
-        if not name:
-            return bot.edit_message_text("❌ Не нашел такой трек в базе Shazam.", message.chat.id, status.message_id)
+        bot.edit_message_text(f"🔍 Ищу полную версию: **{query}**", message.chat.id, msg.message_id, parse_mode="Markdown")
 
-        bot.edit_message_text(f"✅ Нашел: {name}\n📥 Качаю полную версию...", message.chat.id, status.message_id)
-
-        # Качаем полную версию из SoundCloud (там нет капчи YouTube)
-        ydl_sc = {
+        # 2. Качаем ПОЛНЫЙ трек из SoundCloud (избегаем капчи YouTube)
+        ydl_opts = {
             'format': 'bestaudio/best',
-            'outtmpl': 'full.mp3',
-            'default_search': 'scsearch1:', 
+            'outtmpl': 'song.mp3',
+            'default_search': 'scsearch1:',
             'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
             'quiet': True
         }
 
-        with yt_dlp.YoutubeDL(ydl_sc) as ydl:
-            ydl.download([f"scsearch1:{name}"])
-
-        with open('full.mp3', 'rb') as a:
-            bot.send_audio(message.chat.id, a, title=name, performer="Full Version")
-        
-        if os.path.exists('full.mp3'): os.remove('full.mp3')
-        bot.delete_message(message.chat.id, status.message_id)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([f"scsearch1:{query}"])
+            
+        # 3. Отправляем файл
+        with open('song.mp3', 'rb') as audio:
+            bot.send_audio(message.chat.id, audio, title=query, performer="Full Track")
+            
+        os.remove('song.mp3')
+        bot.delete_message(message.chat.id, msg.message_id)
 
     except Exception as e:
-        bot.edit_message_text(f"⚠ Ошибка: {str(e)}", message.chat.id, status.message_id)
+        bot.edit_message_text(f"❌ Не удалось найти чистый трек. Ошибка: {str(e)}", message.chat.id, msg.message_id)
+
+@bot.message_handler(func=lambda m: 'tiktok.com' in m.text)
+def handle_link(message):
+    # Запускаем в отдельном потоке, чтобы бот не тупил
+    threading.Thread(target=download_and_send, args=(message,)).start()
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
