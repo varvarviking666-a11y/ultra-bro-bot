@@ -1,3 +1,6 @@
 pyTelegramBotAPI
 shazamio
 flask
+aiogram
+yt-dlp
+requests
